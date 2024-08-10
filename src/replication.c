@@ -2362,6 +2362,7 @@ void readSyncBulkPayload(connection *conn) {
     } else {
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
+        if (server.cluster_enabled) server.cluster->myself->flags &= ~CLUSTER_NODE_FULL_SYNC;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
     }
@@ -4104,6 +4105,7 @@ void establishPrimaryConnection(void) {
     server.primary->flag.authenticated = 1;
     server.primary->last_interaction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
+    if (server.cluster_enabled) server.cluster->myself->flags &= ~CLUSTER_NODE_FULL_SYNC;
     server.repl_down_since = 0;
 
     /* Fire the primary link modules event. */

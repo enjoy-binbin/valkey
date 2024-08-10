@@ -17,6 +17,7 @@
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
+#define CLUSTER_CANT_FAILOVER_FULL_SYNC 5
 #define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
@@ -53,6 +54,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_NOFAILOVER (1 << 9)            /* Replica will not try to failover. */
 #define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10) /* This node supports extensions. */
 #define CLUSTER_NODE_LIGHT_HDR_SUPPORTED (1 << 11)  /* This node supports light pubsub message header. */
+#define CLUSTER_NODE_FULL_SYNC (1 << 12)            /* the node is about to do a sync and the sync is not complete. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"

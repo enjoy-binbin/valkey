@@ -69,7 +69,7 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 int clusterNodeSetSlotBit(clusterNode *n, int slot);
-void clusterSetPrimary(clusterNode *n, int closeSlots);
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -2625,8 +2625,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                       "as a replica of node %.40s (%s) in shard %.40s",
                       sender->name, sender->human_nodename, sender->shard_id);
             /* Don't clear the migrating/importing states if this is a replica that
-             * just gets promoted to the new primary in the shard. */
-            clusterSetPrimary(sender, !areInSameShard(sender, myself));
+             * just gets promoted to the new primary in the shard.
+             *
+             * Make a full sync hint if sender and myself not in the same shard. */
+            int are_in_same_shard = areInSameShard(sender, myself);
+            clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         } else if ((sender_slots >= migrated_our_slots) && !areInSameShard(sender, myself)) {
             /* When all our slots are lost to the sender and the sender belongs to
@@ -3388,7 +3391,8 @@ int clusterProcessPacket(clusterLink *link) {
              * over the slot, there is nothing else to trigger replica migration. */
             serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
                       myself->replicaof->replicaof->name, myself->replicaof->name);
-            clusterSetPrimary(myself->replicaof->replicaof, 1);
+            int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
+            clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
@@ -3790,10 +3794,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     hdr->configEpoch = htonu64(primary->configEpoch);
 
     /* Set the replication offset. */
-    if (nodeIsReplica(myself))
-        offset = replicationGetReplicaOffset();
-    else
-        offset = server.primary_repl_offset;
+    offset = getNodeReplicationOffset(myself);
     hdr->offset = htonu64(offset);
 
     /* Set the message flags. */
@@ -4327,7 +4328,7 @@ int clusterGetReplicaRank(void) {
     primary = myself->replicaof;
     if (primary == NULL) return 0; /* Never called by replicas without primary. */
 
-    myoffset = replicationGetReplicaOffset();
+    myoffset = getNodeReplicationOffset(myself);
     for (j = 0; j < primary->num_replicas; j++) {
         if (primary->replicas[j] == myself) continue;
         if (nodeCantFailover(primary->replicas[j])) continue;
@@ -4381,6 +4382,7 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_FULL_SYNC: msg = "Replica has not completed sync and can not perform failover."; break;
     default: msg = "Unknown reason code."; break;
     }
     lastlog_time = time(NULL);
@@ -4473,6 +4475,11 @@ void clusterHandleReplicaFailover(void) {
         return;
     }
 
+    if (myself->flags & CLUSTER_NODE_FULL_SYNC && !manual_failover) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_FULL_SYNC);
+        return;
+    }
+
     /* Set data_age to the number of milliseconds we are disconnected from
      * the primary. */
     if (server.repl_state == REPL_STATE_CONNECTED) {
@@ -4522,7 +4529,7 @@ void clusterHandleReplicaFailover(void) {
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, offset %lld).",
                   server.cluster->failover_auth_time - mstime(), server.cluster->failover_auth_rank,
-                  replicationGetReplicaOffset());
+                  getNodeReplicationOffset(myself));
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
          * if our offset is better. */
@@ -4692,7 +4699,8 @@ void clusterHandleReplicaMigration(int max_replicas) {
         !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
         serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
                   target->human_nodename, target->shard_id);
-        clusterSetPrimary(target, 1);
+        int are_in_same_shard = areInSameShard(target, myself);
+        clusterSetPrimary(target, 1, !are_in_same_shard);
     }
 }
 
@@ -4762,7 +4770,7 @@ void clusterHandleManualFailover(void) {
 
     if (server.cluster->mf_primary_offset == -1) return; /* Wait for offset... */
 
-    if (server.cluster->mf_primary_offset == replicationGetReplicaOffset()) {
+    if (server.cluster->mf_primary_offset == getNodeReplicationOffset(myself)) {
         /* Our replication offset matches the primary replication offset
          * announced after clients were paused. We can start the failover. */
         server.cluster->mf_can_start = 1;
@@ -5398,7 +5406,7 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
 
 /* Set the specified node 'n' as primary for this node.
  * If this node is currently a primary, it is turned into a replica. */
-void clusterSetPrimary(clusterNode *n, int closeSlots) {
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync) {
     serverAssert(n != myself);
     serverAssert(myself->numslots == 0);
 
@@ -5409,6 +5417,7 @@ void clusterSetPrimary(clusterNode *n, int closeSlots) {
         if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
     }
     if (closeSlots) clusterCloseAllSlots();
+    if (full_sync) myself->flags |= CLUSTER_NODE_FULL_SYNC;
     myself->replicaof = n;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
@@ -5773,6 +5782,15 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
 
 long long getNodeReplicationOffset(clusterNode *node) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
+        if (nodeIsPrimary(node)) {
+            return server.primary_repl_offset;
+        } else {
+            /* The replica has not completed sync, offset is treated as 0. */
+            if (myself->flags & CLUSTER_NODE_FULL_SYNC) return 0;
+
+            return replicationGetReplicaOffset();
+        }
+
         return nodeIsReplica(node) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     } else {
         return node->repl_offset;
@@ -6118,7 +6136,7 @@ int clusterNodeIsFailing(clusterNode *node) {
 }
 
 int clusterNodeIsNoFailover(clusterNode *node) {
-    return node->flags & CLUSTER_NODE_NOFAILOVER;
+    return nodeCantFailover(node);
 }
 
 const char **clusterDebugCommandExtendedHelp(void) {
@@ -6343,7 +6361,8 @@ void clusterCommandSetSlot(client *c) {
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
-            clusterSetPrimary(n, 1);
+            int are_in_same_shard = areInSameShard(n, myself);
+            clusterSetPrimary(n, 1, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
@@ -6549,7 +6568,8 @@ int clusterCommandSpecial(client *c) {
         }
 
         /* Set the primary. */
-        clusterSetPrimary(n, 1);
+        int are_in_same_shard = areInSameShard(n, myself);
+        clusterSetPrimary(n, 1, !are_in_same_shard);
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);
