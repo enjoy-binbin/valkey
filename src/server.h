@@ -1898,6 +1898,8 @@ struct valkeyServer {
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */
     int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */
+    FILE *fp_wlog;
+    FILE *fp_wlog2;
     int aof_fsync;                      /* Kind of fsync() policy */
     char *aof_filename;                 /* Basename of the AOF file and manifest file */
     char *aof_dirname;                  /* Name of the AOF directory */

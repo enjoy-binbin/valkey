@@ -1197,6 +1197,7 @@ void clusterHandleServerShutdown(void) {
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     clusterSaveConfig(1);
 
+#if !defined(__sun)
     /* Unlock the cluster config file before shutdown, see clusterLockConfig.
      *
      * This is needed if you shutdown a very large server process, it will take
@@ -1209,6 +1210,7 @@ void clusterHandleServerShutdown(void) {
     if (server.cluster_config_file_lock_fd != -1) {
         flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
     }
+#endif /* __sun */
 }
 
 /* Reset a node performing a soft or hard reset:

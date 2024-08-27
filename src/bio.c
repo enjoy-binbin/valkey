@@ -244,15 +244,9 @@ void *bioProcessBackgroundJobs(void *arg) {
         int job_type = job->header.type;
 
         if (job_type == BIO_CLOSE_FILE) {
-            if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
-                serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-            }
-            if (job->fd_args.need_reclaim_cache) {
-                if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
-                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
-                }
-            }
-            close(job->fd_args.fd);
+            fseek(server.fp_wlog2, 0, SEEK_END);
+            serverLog(LL_WARNING, "1111");
+
         } else if (job_type == BIO_AOF_FSYNC || job_type == BIO_CLOSE_AOF) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because

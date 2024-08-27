@@ -1242,6 +1242,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
+    serverLog(LL_WARNING, "================");
+
+    fseek(server.fp_wlog2, 0, SEEK_END);
+
+    bioCreateCloseJob(0, 0, 0);
+
+    server.fp_wlog = fopen("1.txt", "wb");
+    server.fp_wlog2 = server.fp_wlog;
+    fclose(server.fp_wlog);
+    server.fp_wlog = NULL;
 
     server.hz = server.config_hz;
     /* Adapt the server.hz value to the number of configured clients. If we have
@@ -2551,6 +2561,10 @@ void initServer(void) {
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT, server.syslog_facility);
     }
+
+    server.fp_wlog = fopen("1.txt", "wb");
+    server.fp_wlog2 = server.fp_wlog;
+    fclose(server.fp_wlog);
 
     /* Initialization after setting defaults from the config system. */
     server.aof_state = server.aof_enabled ? AOF_ON : AOF_OFF;
