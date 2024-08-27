@@ -1244,14 +1244,44 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
     serverLog(LL_WARNING, "================");
 
-    fseek(server.fp_wlog2, 0, SEEK_END);
 
-    bioCreateCloseJob(0, 0, 0);
+    FILE *fp_wlog = fopen("1.txt", "wb");
+    serverLog(LL_WARNING, "fp_wlog %p", fp_wlog);
 
-    server.fp_wlog = fopen("1.txt", "wb");
-    server.fp_wlog2 = server.fp_wlog;
-    fclose(server.fp_wlog);
-    server.fp_wlog = NULL;
+    FILE* fp_wlog2 = server.fp_wlog;
+
+    serverLog(LL_WARNING, "fp_wlog2 %p", fp_wlog2);
+    fclose(fp_wlog);
+
+    int w = fwrite("hello", 5, 1, fp_wlog);
+    serverLog(LL_WARNING, "w: %d, %s", w, strerror(errno));
+    fseek(fp_wlog, 0, SEEK_END);
+    serverLog(LL_WARNING, "w: %d, %s", w, strerror(errno));
+    long logfile_offset = ftell(fp_wlog);
+
+    serverLog(LL_WARNING, "w: %d, %s, offset: %ld", w, strerror(errno), logfile_offset);
+    fseek(fp_wlog, 0, SEEK_END);
+    serverLog(LL_WARNING, "w: %d, %s", w, strerror(errno));
+
+    fp_wlog = NULL;
+
+
+    serverLog(LL_WARNING, "fp_wlog2 %p", fp_wlog2);
+    void *a = zmalloc(sizeof(robj *));
+    void *b = zmalloc(sizeof(robj *));
+    void *c = zmalloc(sizeof(robj *));
+    void *d = zmalloc(sizeof(robj *));
+    serverLog(LL_WARNING, "%p %p %p %p", a, b, c, d);
+    FILE* fp_wlog4 = fopen("2.txt", "wb");
+    FILE* fp_wlog5 = fopen("3.txt", "wb");
+    FILE* fp_wlog6 = fopen("4.txt", "wb");
+    FILE* fp_wlog7 = fopen("6.txt", "wb");
+
+    serverLog(LL_WARNING, "%p %p %p %p", fp_wlog4, fp_wlog5, fp_wlog6, fp_wlog7);
+    fseek(fp_wlog2, 0, SEEK_END);
+    fseek(fp_wlog2, 0, SEEK_END);
+    fseek(fp_wlog2, 0, SEEK_END);
+    fseek(fp_wlog2, 0, SEEK_END);
 
     server.hz = server.config_hz;
     /* Adapt the server.hz value to the number of configured clients. If we have
@@ -2563,7 +2593,6 @@ void initServer(void) {
     }
 
     server.fp_wlog = fopen("1.txt", "wb");
-    server.fp_wlog2 = server.fp_wlog;
     fclose(server.fp_wlog);
 
     /* Initialization after setting defaults from the config system. */
