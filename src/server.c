@@ -154,7 +154,7 @@ void serverLogRaw(int level, const char *msg) {
             role_char = (server.primary_host ? 'S' : 'M'); /* replica or Primary. */
         }
 
-        size_t len = snprintf(buf, sizeof(buf), "%d:%c ", (int)pid, role_char);
+        size_t len = snprintf(buf, sizeof(buf), "%d-%d:%c ", server.log_fd, (int)pid, role_char);
         len += strftime(buf + len, sizeof(buf) - len, "%d %b %Y %H:%M:%S.", &tm);
         len += snprintf(buf + len, sizeof(buf) - len, "%03d %c ", (int)tv.tv_usec / 1000, c[level]);
 
@@ -1493,8 +1493,10 @@ void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, 
 
     if (mask & IN_ATTRIB) {
 
-    } else if (mask & IN_CLOSE_WRITE) {
+    } else if (mask & IN_DELETE) {
 
+        serverLogOpen();
+        serverLog(LL_WARNING, " IN_DELETE_SELF");
     } else if (mask & IN_DELETE_SELF) {
         serverLogOpen();
         serverLog(LL_WARNING, " IN_DELETE_SELF");
