@@ -1495,9 +1495,9 @@ void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, 
 
     } else if (mask & IN_CLOSE_WRITE) {
 
-    } else if (mask & IN_DELETE) {
+    } else if (mask & IN_DELETE_SELF) {
         serverLogOpen();
-        serverLog(LL_WARNING, "IN DELETE");
+        serverLog(LL_WARNING, " IN_DELETE_SELF");
     } else if (mask & IN_MOVE_SELF) {
 
     }
