@@ -1488,6 +1488,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     return 1000 / server.hz;
 }
 
+void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
+    serverLog(LL_WARNING, "11111");
+}
 
 void blockingOperationStarts(void) {
     if (!server.blocking_op_nesting++) {
@@ -6672,11 +6675,6 @@ serverTestProc *getTestProcByName(const char *name) {
     return NULL;
 }
 #endif
-
-void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
-    serverLog(LL_WARNING, "11111");
-}
-
 
 int main(int argc, char **argv) {
     struct timeval tv;
