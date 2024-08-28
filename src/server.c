@@ -1491,7 +1491,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
     serverLog(LL_WARNING, "11111");
 
-    if (mast & IN_ATTRIB) {
+    if (mask & IN_ATTRIB) {
 
     } else if (mask & IN_CLOSE_WRITE) {
 
