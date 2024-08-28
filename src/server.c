@@ -62,6 +62,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <sys/inotify.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -6654,6 +6655,11 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
+void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
+    serverLog(LL_WARNING, "11111");
+}
+
+
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -6883,7 +6889,25 @@ int main(int argc, char **argv) {
     if (server.sentinel_mode) sentinelCheckConfigFile();
 
     /* Make sure that after the configuration is loaded and before printing the logs. */
-    if (server.logfile[0] == '\0') server.log_fd = STDOUT_FILENO;
+    if (server.logfile[0] == '\0') {
+        server.log_fd = STDOUT_FILENO;
+    } else {
+        int notify_fd = inotify_init();
+        serverLog(LL_WARNING, "notify_fd: %d", notify_fd);
+        if (notify_fd == -1) {
+
+        }
+
+        int wd = inotify_add_watch(notify_fd, server.logfile, IN_ALL_EVENTS);
+        serverLog(LL_WARNING, "wd: %d", wd);
+        if (wd == -1) {
+
+        }
+
+        if (aeCreateFileEvent(server.el, notify_fd, AE_READABLE, notifyReadHandler, NULL) == AE_ERR) {
+
+        }
+    }
 
         /* Do system checks */
 #ifdef __linux__
