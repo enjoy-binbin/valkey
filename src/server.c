@@ -1490,6 +1490,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
 void notifyReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
     serverLog(LL_WARNING, "11111");
+
+    if (mast & IN_ATTRIB) {
+
+    } else if (mask & IN_CLOSE_WRITE) {
+
+    } else if (mask & IN_DELETE) {
+        serverLogOpen();
+        serverLog(LL_WARNING, "IN DELETE");
+    } else if (mask & IN_MOVE_SELF) {
+
+    }
 }
 
 void blockingOperationStarts(void) {
@@ -2741,7 +2752,7 @@ void initServer(void) {
 
     }
 
-    int wd = inotify_add_watch(notify_fd, server.logfile, IN_ALL_EVENTS);
+    int wd = inotify_add_watch(notify_fd, server.logfile, IN_DELETE | IN_MOVED_FROM | IN_CREATE);
     serverLog(LL_WARNING, "wd: %d", wd);
     if (wd == -1) {
 
