@@ -2620,7 +2620,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * sender. In this case we don't reconfigure ourselves as a replica
      * of the sender. */
     if (new_primary && cur_primary->numslots == 0) {
-        if (server.cluster_allow_replica_migration || are_in_same_shard) {
+        if ((nodeIsPrimary(myself) && server.cluster_allow_replica_migration) ||
+            (nodeIsReplica(myself) && are_in_same_shard)) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "
                       "as a replica of node %.40s (%s) in shard %.40s",
@@ -2631,7 +2632,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * If the sender and myself are in the same shard, try psync. */
             clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-        } else if ((sender_slots >= migrated_our_slots) && !are_in_same_shard) {
+        } else if (nodeIsPrimary(myself) && (sender_slots >= migrated_our_slots) && !are_in_same_shard) {
             /* When all our slots are lost to the sender and the sender belongs to
              * a different shard, this is likely due to a client triggered slot
              * migration. Don't reconfigure this node to migrate to the new shard

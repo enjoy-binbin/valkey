@@ -335,9 +335,13 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT" {
-        R 3 config set cluster-allow-replica-migration no
-        R 7 config set cluster-allow-replica-migration yes
+    test "Primary allow replica-migration and replica not allow, both will eventually migrate" {
+        # Server 3 will become a replica because cluster-allow-replica-migration is yes.
+        R 3 config set cluster-allow-replica-migration yes
+
+        # Server 7 will follow server 3 and become a replica even though
+        # its cluster-allow-replica-migration is no.
+        R 7 config set cluster-allow-replica-migration no
 
         # Move slot 0 from primary 3 to primary 0.
         set addr "[srv 0 host]:[srv 0 port]"
@@ -349,16 +353,55 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
         }
 
-        # Make sure server 3 lost its replica (server 7) and server 7 becomes a replica of primary 0.
+        # Make sure server 3 and server 7 becomes a replica of primary 0.
         wait_for_condition 1000 50 {
-            [s -3 role] eq {master} &&
-            [s -3 connected_slaves] eq 0 &&
+            [s -3 role] eq {slave} &&
             [s -7 role] eq {slave} &&
+            [get_my_primary_peer 3] eq $addr &&
             [get_my_primary_peer 7] eq $addr
         } else {
             puts "R 3 role: [R 3 role]"
             puts "R 7 role: [R 7 role]"
             fail "Server 3 and 7 role response has not changed"
+        }
+    }
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test "Primary not allow replica-migration and replica allow, neither will migrate" {
+        # Server 3 becomes an empty primary but does not become a replica
+        # because cluster-allow-replica-migration is no.
+        R 3 config set cluster-allow-replica-migration no
+
+        # Server 7 is still a replica of server 3 even though it is configured
+        # with cluster-allow-replica-migration set to yes, since they are in the
+        # same shard.
+        R 7 config set cluster-allow-replica-migration yes
+
+        # Record the original primary peer to ensure it does not change.
+        set my_primary_peer [get_my_primary_peer 7]
+
+        # Move slot 0 from primary 3 to primary 0.
+        set addr "[srv 0 host]:[srv 0 port]"
+        set myid [R 3 CLUSTER MYID]
+        set code [catch {
+            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+        } result]
+        if {$code != 0} {
+            fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
+        }
+
+        # Make sure server 3 become an empty primary and server 7 is still its replica.
+        wait_for_log_messages -3 {"*I am now an empty primary*"} 0 1000 50
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master} &&
+            [s -3 connected_slaves] eq 1 &&
+            [s -7 role] eq {slave} &&
+            [get_my_primary_peer 7] eq $my_primary_peer
+        } else {
+            puts "R 3 role: [R 3 role]"
+            puts "R 7 role: [R 7 role]"
+            fail "Server 3 and 7 role response have changed"
         }
     }
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
