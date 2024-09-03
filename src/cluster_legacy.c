@@ -2620,8 +2620,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * sender. In this case we don't reconfigure ourselves as a replica
      * of the sender. */
     if (new_primary && cur_primary->numslots == 0) {
-        if ((nodeIsPrimary(myself) && server.cluster_allow_replica_migration) ||
-            (nodeIsReplica(myself) && are_in_same_shard)) {
+        if ((nodeIsPrimary(myself) && server.cluster_allow_replica_migration) || are_in_same_shard) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "
                       "as a replica of node %.40s (%s) in shard %.40s",

@@ -45,9 +45,11 @@ proc check_server_response {server_id} {
 # restart a server and wait for it to come back online
 proc fail_server {server_id} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    R $server_id DEBUG LOG "========== I am server $server_id, before pause_process =========="
     pause_process [srv [expr -1*$server_id] pid]
     after [expr 3*$node_timeout]
     resume_process [srv [expr -1*$server_id] pid]
+    R $server_id DEBUG LOG "========== I am server $server_id, after pause_process =========="
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {

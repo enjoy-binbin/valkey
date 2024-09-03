@@ -180,6 +180,17 @@ proc cluster_allocate_slots {masters replicas} {
     }
 }
 
+# A helper function that can print the server id in the server logs.
+# This can help us locate the corresponding server in the log file.
+proc after_replica_allocation {primaries replicas} {
+    for {set i 0} {$i < $primaries} {incr i} {
+        R $i DEBUG LOG "========== I am primary $i =========="
+    }
+    for {set i $i} {$i < [expr $primaries+$replicas]} {incr i} {
+        R $i DEBUG LOG "========== I am replica $i =========="
+    }
+}
+
 proc default_replica_allocation {masters replicas} {
     # Setup master/replica relationships
     set node_count [expr $masters + $replicas]
@@ -189,6 +200,7 @@ proc default_replica_allocation {masters replicas} {
             R $j CLUSTER REPLICATE $nodeid
         }
     }
+    after_replica_allocation $masters $replicas
 }
 
 # Add 'replicas' replicas to a cluster composed of 'masters' masters.
@@ -201,6 +213,7 @@ proc cluster_allocate_replicas {masters replicas} {
         set master_myself [cluster_get_myself $master_id]
         R $replica_id cluster replicate [dict get $master_myself id]
     }
+    after_replica_allocation $masters $replicas
 }
 
 # Setup method to be executed to configure the cluster before the
