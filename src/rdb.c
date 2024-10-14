@@ -37,6 +37,7 @@
 #include "intset.h" /* Compact integer set structure */
 #include "bio.h"
 #include "zmalloc.h"
+#include "cluster.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -1315,7 +1316,7 @@ werr:
     return -1;
 }
 
-ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
+ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveInfo *rsi) {
     dictEntry *de;
     ssize_t written = 0;
     ssize_t res;
@@ -1365,6 +1366,13 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         size_t rdb_bytes_before_key = rdb->processed_bytes;
 
         initStaticStringObject(key, keystr);
+
+        /* Only save data for slots that need sync. */
+        if (rsi && rsi->slot_ranges && listLength(rsi->slot_ranges) > 0 &&
+            !isKeyInSlotRanges(&key, rsi->slot_ranges)) {
+            continue;
+        }
+
         expire = getExpire(db, &key);
         if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
         written += res;
@@ -1420,7 +1428,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
         for (j = 0; j < server.dbnum; j++) {
-            if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
+            if (rdbSaveDb(rdb, j, rdbflags, &key_counter, rsi) == -1) goto werr;
         }
     }
 
@@ -3555,6 +3563,9 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
             if (replica->replica_req != req) continue;
+
+            /* Check replica has the exact slot ranges. */
+            if (!isSlotRangeListSame(replica->slotsync_slots, rsi->slot_ranges)) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {

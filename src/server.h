@@ -1317,6 +1317,9 @@ typedef struct client {
     uint64_t associated_rdb_client_id;         /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;         /* Time of the first freeClient call on this client. Used for delaying free. */
     void *slotsync_link;                       /* Pointer to the slotsync link. */
+    list *slotsync_slots;                      /* List of slot ranges that the client interested. */
+    long long slotsync_sent_bytes;             /* todo */
+    long long slotsync_recv_bytes;             /* todo */
     multiState mstate;                         /* MULTI/EXEC state */
     blockingState bstate;                      /* blocking state */
     long long woff;                            /* Last write global replication offset. */
@@ -1560,9 +1563,10 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
+    list *slot_ranges;                    /* todo */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, NULL}
 
 struct malloc_stats {
     size_t zmalloc_used;
