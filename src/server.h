@@ -1316,6 +1316,7 @@ typedef struct client {
     short replica_req;                         /* Replica requirements: REPLICA_REQ_* */
     uint64_t associated_rdb_client_id;         /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;         /* Time of the first freeClient call on this client. Used for delaying free. */
+    void *slotsync_link;                       /* Pointer to the slotsync link. */
     multiState mstate;                         /* MULTI/EXEC state */
     blockingState bstate;                      /* blocking state */
     long long woff;                            /* Last write global replication offset. */

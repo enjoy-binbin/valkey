@@ -194,6 +194,7 @@ client *createClient(connection *conn) {
     c->replica_req = REPLICA_REQ_NONE;
     c->associated_rdb_client_id = 0;
     c->rdb_client_disconnect_time = 0;
+    c->slotsync_link = NULL;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -1825,6 +1826,9 @@ void freeClient(client *c) {
         c->mem_usage_bucket->mem_usage_sum -= c->last_memory_usage;
         listDelNode(c->mem_usage_bucket->clients, c->mem_usage_bucket_node);
     }
+
+    /* Free slot sync structures. */
+    if (c->slotsync_link) onSlotSyncClientClose(c->slotsync_link);
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
