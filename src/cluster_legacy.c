@@ -131,6 +131,7 @@ int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node);
 sds formatSlotSyncImportingSlots(void);
 void addReplySlotSyncLinksDescription(client *c);
 void clusterKillSlotSyncLink(client *c, char *linkid);
+void clusterSlotSyncCron(void);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -5020,6 +5021,9 @@ void clusterCron(void) {
     iteration++; /* Number of times this function was called so far. */
 
     clusterUpdateMyselfHostname();
+
+    /* Do something for slot sync. */
+    clusterSlotSyncCron();
 
     /* The handshake timeout is the time after which a handshake node that was
      * not turned into a normal node is removed from the nodes. Usually it is

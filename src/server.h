@@ -1320,6 +1320,7 @@ typedef struct client {
     list *slotsync_slots;                      /* List of slot ranges that the client interested. */
     long long slotsync_sent_bytes;             /* todo */
     long long slotsync_recv_bytes;             /* todo */
+    int slotsync_failed;                       /* todo */
     multiState mstate;                         /* MULTI/EXEC state */
     blockingState bstate;                      /* blocking state */
     long long woff;                            /* Last write global replication offset. */
@@ -2891,6 +2892,7 @@ int handleClientsWithPendingWrites(void);
 void adjustThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);
 int updateClientMemUsageAndBucket(client *c);
+int isNormalReplicaClient(client *c);
 void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
 void removeFromServerClientList(client *c);
