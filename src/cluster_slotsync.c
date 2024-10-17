@@ -479,6 +479,12 @@ void syncWithSlotOwner(connection *conn) {
     char *err = NULL;
     int sockerr = 0;
 
+    /* Simulate IO error. */
+    if (testInjectError("crs-io-error-beforce-slot-sync")) {
+        serverLog(LL_WARNING, "inject crs-io-error-beforce-slot-sync");
+        goto error;
+    }
+
     /* Check for errors in the socket: after a non blocking connect() we
      * may find that the socket is in error state. */
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -500,6 +506,12 @@ void syncWithSlotOwner(connection *conn) {
         } else {
             link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_CAPA;
         }
+    }
+
+    /* Simulate IO error. */
+    if (testInjectError("crs-io-error-send-auth")) {
+        serverLog(LL_WARNING, "inject crs-io-error-send-auth");
+        goto error;
     }
 
     /* CLUSTER_SLOTSYNC_STATE: SEND_AUTH ==> RECV_AUTH
@@ -573,14 +585,14 @@ void syncWithSlotOwner(connection *conn) {
     serverLog(LL_WARNING, "Master did not respond to command during slotsync handshake");
     /* Fall through to regular error handling */
 
-    error:
+error:
     connClose(conn);
 
     /* Set the state to TOCONNECT, so the cron will retry start next time. */
     link->sync_state = CLUSTER_SLOTSYNC_STATE_TOCONNECT;
     return;
 
-    write_error: /* Handle sendCommand() errors. */
+write_error: /* Handle sendCommand() errors. */
     serverLog(LL_WARNING,"Sending command to target handshake: %s", err);
     sdsfree(err);
     goto error;
@@ -601,6 +613,15 @@ void continueSlotSync(clusterSlotSyncLink *link) {
         sds slot_ranges = reprSlotRangeListWithBlank(link->slot_ranges);
         sync_cmd = sdscatsds(sync_cmd, slot_ranges);
         sync_cmd = sdscatprintf(sync_cmd, "\r\n");
+
+        /* Simulate IO error. */
+        if (testInjectError("crs-io-error-beforce-send-sync")) {
+            serverLog(LL_WARNING, "inject crs-io-error-beforce-send-sync");
+            sdsfree(slot_ranges);
+            sdsfree(sync_cmd);
+            goto error;
+        }
+
         if (connSyncWrite(link->sync_conn, sync_cmd, sdslen(sync_cmd), server.repl_syncio_timeout*1000) == -1) {
             serverLog(LL_WARNING,"I/O error writing to MASTER: %s",strerror(errno));
             sdsfree(slot_ranges);
@@ -639,7 +660,7 @@ void continueSlotSync(clusterSlotSyncLink *link) {
     link->transfer_tmpfile_name = zstrdup(tmpfile);
     return;
 
-    error:
+error:
     if (tmpfd != -1) close(tmpfd);
     connClose(link->sync_conn);
 
@@ -736,6 +757,11 @@ void readSlotSyncBulkPayload(connection *conn) {
             readlen = (left < (signed)sizeof(buf)) ? left : (signed)sizeof(buf);
         }
 
+        if (testInjectError("crs-io-error-recv-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-recv-rdb");
+            goto error;
+        }
+
         nread = connRead(conn,buf,readlen);
         if (nread <= 0) {
             if (connGetState(conn) == CONN_STATE_CONNECTED) {
@@ -767,6 +793,11 @@ void readSlotSyncBulkPayload(connection *conn) {
                 eof_reached = 1;
         }
 
+        if (testInjectError("crs-io-error-write-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-write-rdb");
+            goto error;
+        }
+
         /* Update the last I/O time for the replication transfer (used in
          * order to detect timeouts during replication), and write what we
          * got from the socket to the dump file on disk. */
@@ -779,6 +810,11 @@ void readSlotSyncBulkPayload(connection *conn) {
             goto error;
         }
         link->transfer_read_size += nread;
+
+        if (testInjectError("crs-io-error-truncate-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-truncate-rdb");
+            goto error;
+        }
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
         if (usemark && eof_reached) {
@@ -903,6 +939,11 @@ void readSlotSyncBulkPayload(connection *conn) {
             goto error;
         }
 
+        if (testInjectError("crs-io-error-rename-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-rename-rdb");
+            goto error;
+        }
+
         /* Rename rdb like renaming rewrite aof asynchronously. */
         sprintf(rdbpath, "%s_slot", server.rdb_filename);
         int old_rdb_fd = open(rdbpath,O_RDONLY|O_NONBLOCK);
@@ -975,7 +1016,7 @@ void readSlotSyncBulkPayload(connection *conn) {
     if (server.aof_enabled) restartAOFAfterSYNC();
     return;
 
-    error:
+error:
     /* Reset the link state to TOCONNECT, the cron will retry start next time. */
     resetSlotSyncLinkForReconnect(link);
     return;
@@ -1086,6 +1127,12 @@ void clusterInitSlotFailover(void) {
         slotLinkSendFailover(link->client);
     }
     server.cluster->slot_mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+    char *val = getInjectOptionValue("crs-cluster-mf-timeout");
+    if (val) {
+        server.cluster->slot_mf_end = mstime() + atoi(val);
+        zfree(val);
+        serverLog(LL_WARNING, "crs-cluster-mf-timeout: %d", atoi(val));
+    }
     serverLog(LL_NOTICE, "Slot failover is initialized. slot_mf_end=%lld", server.cluster->slot_mf_end);
 }
 
@@ -1395,4 +1442,25 @@ int isSlotInPendingDelete(int slot) {
         }
     }
     return 0;
+}
+
+int testInjectError(const char *error) {
+    if (server.debug_context) {
+        return !strcmp(server.debug_context, error);
+    }
+    return 0;
+}
+
+char *getInjectOptionValue(const char *option) {
+    char *res = NULL;
+    if (server.debug_context) {
+        char *options = zstrdup(server.debug_context);
+        char *key = strtok(options, ":");
+        char *val = strtok(NULL, ":");
+        if (key && !strcmp(key, option)) {
+            res = zstrdup(val);
+        }
+        zfree(options);
+    }
+    return res;
 }
