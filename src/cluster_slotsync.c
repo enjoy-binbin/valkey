@@ -277,6 +277,7 @@ void resetSlotSyncLink(clusterSlotSyncLink *link, int reconn) {
         link->slot_mf_ready = 0;
         link->slot_mf_end = 0;
         link->slot_mf_lag = 0;
+        link->sync_conn = NULL;
     } else {
         listRelease(link->slot_ranges);
     }
@@ -614,7 +615,7 @@ void syncWithSlotOwner(connection *conn) {
     /* Fall through to regular error handling */
 
 error:
-    connClose(conn);
+    freeSlotSyncConn(link);
 
     /* Set the state to TOCONNECT, so the cron will retry start next time. */
     link->sync_state = CLUSTER_SLOTSYNC_STATE_TOCONNECT;
