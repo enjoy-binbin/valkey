@@ -1321,6 +1321,7 @@ typedef struct client {
     long long slotsync_sent_bytes;             /* todo */
     long long slotsync_recv_bytes;             /* todo */
     int slotsync_failed;                       /* todo */
+    mstime_t slotsync_mf_end;                  /* todo */
     multiState mstate;                         /* MULTI/EXEC state */
     blockingState bstate;                      /* blocking state */
     long long woff;                            /* Last write global replication offset. */
