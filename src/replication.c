@@ -598,7 +598,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
             if (!canFeedReplicaReplBuffer(replica)) continue;
 
             /* Skip the slaves which are not in the slot sync mode. */
-            if (!replica->slotsync_slots || listLength(replica->slotsync_slots) == 0) continue;
+            if (!replica->flag.slot_sync_replica) continue;
 
             addReply(replica, selectcmd);
             replica->slotsync_sent_bytes += change_offset;
@@ -649,7 +649,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         if (!canFeedReplicaReplBuffer(replica)) continue;
 
         /* Skip the replicas which are not in the slot sync mode. */
-        if (!replica->slotsync_slots || listLength(replica->slotsync_slots) == 0) continue;
+        if (!replica->flag.slot_sync_replica) continue;
 
         /* Skip the command which is not in this slave's sync slot ranges. */
         if (!isCommandInSlotRanges(argc, argv, replica->slotsync_slots)) continue;
@@ -1022,7 +1022,8 @@ int startBgsaveForReplication(int mincapa, int req, list *slot_ranges) {
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
-    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s",
+    serverLog(LL_NOTICE, "Starting BGSAVE for %s with target: %s using: %s",
+              slot_ranges ? "SLOT SYNC" : "SYNC",
               socket_target ? "replicas sockets" : "disk",
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
 
@@ -1210,6 +1211,11 @@ void syncCommand(client *c) {
 
         /* Handling slot sync requests. */
         if (c->argc >= 3) {
+            if (c->slotsync_slots) {
+                addReplyError(c, "Already in slot sync state.");
+                return;
+            }
+
             list *slot_ranges = createSlotRangeList();
             int startslot, endslot;
             for (int i = 1; i < c->argc; i += 2) {
@@ -1229,8 +1235,8 @@ void syncCommand(client *c) {
                 }
                 /* Check if the current slot range is ready to do the slot sync. */
                 for (int j = startslot; j <= endslot; j++) {
-                    if (isSlotInSlotRangeList(j, slot_ranges) || isSlotInSlotRangeList(j, c->slotsync_slots)) {
-                        addReplyErrorFormat(c, "Slot %d is already in slot sync.", j);
+                    if (isSlotInSlotRangeList(j, slot_ranges)) {
+                        addReplyError(c, "Slot ranges have intersections.");
                         listRelease(slot_ranges);
                         return;
                     }
@@ -1242,9 +1248,8 @@ void syncCommand(client *c) {
                 listAddNodeTail(slot_ranges, new_range);
                 serverLog(LL_NOTICE, "Syncing slot range [%d-%d]", startslot, endslot);
             }
-
-            listJoin(c->slotsync_slots, slot_ranges);
-            listRelease(slot_ranges);
+            c->slotsync_slots = slot_ranges;
+            c->flag.slot_sync_replica = 1;
         }
 
         /* If a replica uses SYNC, we are dealing with an old implementation
@@ -1267,7 +1272,6 @@ void syncCommand(client *c) {
     /* Wait for any IO pending operation to finish before changing the client state */
     waitForClientIO(c);
     c->flag.replica = 1;
-    if (listLength(c->slotsync_slots)) c->flag.slot_sync = 1;
     listAddNodeTail(server.replicas, c);
 
     /* Create the replication backlog if needed. */
@@ -1297,7 +1301,7 @@ void syncCommand(client *c) {
         while ((ln = listNext(&li))) {
             /* If the client is a replica in slot sync mode, we can't reuse
              * any replica in the waiting list. */
-            if (listLength(c->slotsync_slots) != 0) {
+            if (c->flag.slot_sync_replica) {
                 ln = NULL;
                 break;
             }
@@ -1307,8 +1311,8 @@ void syncCommand(client *c) {
              * a replica without replication buffer. What's more, we
              * can't use a replica in slot sync mode either. */
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                listLength(replica->slotsync_slots) == 0 &&
-                (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)))
+                (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)) &&
+                !replica->flag.slot_sync_replica)
                 break;
         }
         /* To attach this replica, we check that it has at least all the
@@ -1338,7 +1342,7 @@ void syncCommand(client *c) {
         /* CASE 3: There is no BGSAVE is in progress. */
     } else {
         if (server.repl_diskless_sync && (c->replica_capa & REPLICA_CAPA_EOF) && server.repl_diskless_sync_delay &&
-            listLength(c->slotsync_slots) != 0) {
+            !c->flag.slot_sync_replica) {
             /* Diskless replication RDB child is created inside
              * replicationCron() since we want to delay its start a
              * few seconds to wait for more replicas to arrive. */
@@ -1554,8 +1558,8 @@ void replconfCommand(client *c) {
             /* Only works in cluster mode. */
             if (!server.cluster_enabled) return;
 
-            /* Only works for a slave in slotsync mode. */
-            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+            /* Only works for a replica in slotsync mode. */
+            if (!c->flag.slot_sync_replica) return;
 
             /* If this was a diskless replication, we need to really put
              * the replica online when the first ACK is received (which
@@ -1605,8 +1609,8 @@ void replconfCommand(client *c) {
             /* Only works in cluster mode. */
             if (!server.cluster_enabled) return;
 
-            /* Only works for a slave in slotsync mode. */
-            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+            /* Only works for a replica in slotsync mode. */
+            if (!c->flag.slot_sync_replica) return;
 
             /* Skip if slot failover already in progress. */
             if (c->slotsync_mf_end) return;
@@ -1636,8 +1640,8 @@ void replconfCommand(client *c) {
             /* Only works in cluster mode. */
             if (!server.cluster_enabled) return;
 
-            /* Only works for a slave in slotsync mode. */
-            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+            /* Only works for a replica in slotsync mode. */
+            if (!c->flag.slot_sync_replica) return;
 
             /* Only works when slot failover in progress. */
             if (!c->slotsync_mf_end) return;
