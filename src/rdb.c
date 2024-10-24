@@ -38,6 +38,7 @@
 #include "bio.h"
 #include "zmalloc.h"
 #include "cluster.h"
+#include "cluster_legacy.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -57,6 +58,9 @@
 
 /* This macro tells if we are in the context of a RESTORE command, and not loading an RDB or AOF. */
 #define isRestoreContext() ((server.current_client == NULL || server.current_client->id == CLIENT_ID_AOF) ? 0 : 1)
+
+/* This macro tells if rsi is used to store the slot RDB by checking rsi->slot_ranges. */
+#define isSlotSyncRdbSaveInfo(rsi) ((rsi) && ((rsi)->slot_ranges))
 
 char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
@@ -1316,16 +1320,89 @@ werr:
     return -1;
 }
 
+/* Get the size in kvsoter for RDB save. If it is slot sync, only the size
+ * in the corresponding slot range will be obtained. */
+unsigned long long getKvstoreSizeForRdbSave(kvstore *kvs, rdbSaveInfo *rsi) {
+    /* It is not slot sync and returns kvstoreSize directly. */
+    if (!isSlotSyncRdbSaveInfo(rsi)) {
+        return kvstoreSize(kvs);
+    }
+
+    /* This is a slot sync, only the size in the corresponding slot range is
+     * obtained. */
+    unsigned long long size = 0;
+    listNode *ln;
+    listIter li;
+    listRewind(rsi->slot_ranges, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int curr_slot = range->start_slot; curr_slot <= range->end_slot; curr_slot++) {
+            size += kvstoreDictSize(kvs, curr_slot);
+        }
+    }
+    return size;
+}
+
+/* Write slot-info information to RDB as an aux field, this info is used to resize
+ * the slot dict when loading RDB. */
+ssize_t rdbSaveSlotInfoAuxFields(rio *rdb, serverDb *db, int curr_slot) {
+    sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreDictSize(db->keys, curr_slot),
+                                 kvstoreDictSize(db->expires, curr_slot));
+    ssize_t written = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info);
+    sdsfree(slot_info);
+    return written;
+}
+
+/* Save a key-value entry. */
+ssize_t rdbSaveKeyValueEntry(rio *rdb, int dbid, dictEntry *de, long *key_counter, char *pname) {
+    ssize_t written = 0;
+    ssize_t res;
+    static long long info_updated_time = 0;
+
+    serverDb *db = server.db + dbid;
+
+    sds keystr = dictGetKey(de);
+    robj key, *o = dictGetVal(de);
+    long long expire;
+    size_t rdb_bytes_before_key = rdb->processed_bytes;
+
+    initStaticStringObject(key, keystr);
+    expire = getExpire(db, &key);
+    if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) return -1;
+    written += res;
+
+    /* In fork child process, we can try to release memory back to the
+     * OS and possibly avoid or decrease COW. We give the dismiss
+     * mechanism a hint about an estimated size of the object we stored. */
+    size_t dump_size = rdb->processed_bytes - rdb_bytes_before_key;
+    if (server.in_fork_child) dismissObject(o, dump_size);
+
+    /* Update child info every 1 second (approximately).
+     * in order to avoid calling mstime() on each iteration, we will
+     * check the diff every 1024 keys */
+    if (((*key_counter)++ & 1023) == 0) {
+        long long now = mstime();
+        if (now - info_updated_time >= 1000) {
+            sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_counter, pname);
+            info_updated_time = now;
+        }
+    }
+
+    return written;
+}
+
 ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveInfo *rsi) {
     dictEntry *de;
     ssize_t written = 0;
     ssize_t res;
     kvstoreIterator *kvs_it = NULL;
-    static long long info_updated_time = 0;
+    kvstoreDictIterator *kvs_di = NULL;
     char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" : "RDB";
 
     serverDb *db = server.db + dbid;
-    unsigned long long int db_size = kvstoreSize(db->keys);
+    unsigned long long db_size = getKvstoreSizeForRdbSave(db->keys, rsi);
+    unsigned long long db_size2 = kvstoreSize(db->keys);
+    serverLog(LL_WARNING, "db_size: %lld, db_size2: %lld", db_size, db_size2);
     if (db_size == 0) return 0;
 
     /* Write the SELECT DB opcode */
@@ -1335,7 +1412,9 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveIn
     written += res;
 
     /* Write the RESIZE DB opcode. */
-    unsigned long long expires_size = kvstoreSize(db->expires);
+    unsigned long long expires_size = getKvstoreSizeForRdbSave(db->expires, rsi);
+    unsigned long long expires_size2 = kvstoreSize(db->expires);
+    serverLog(LL_WARNING, "expires_size: %lld, expires_size2: %lld", expires_size, expires_size2);
     if ((res = rdbSaveType(rdb, RDB_OPCODE_RESIZEDB)) < 0) goto werr;
     written += res;
     if ((res = rdbSaveLen(rdb, db_size)) < 0) goto werr;
@@ -1343,62 +1422,51 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveIn
     if ((res = rdbSaveLen(rdb, expires_size)) < 0) goto werr;
     written += res;
 
-    kvs_it = kvstoreIteratorInit(db->keys);
-    int last_slot = -1;
-    /* Iterate this DB writing every entry */
-    while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
-        int curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
-        /* Save slot info. */
-        if (server.cluster_enabled && curr_slot != last_slot) {
-            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreDictSize(db->keys, curr_slot),
-                                         kvstoreDictSize(db->expires, curr_slot));
-            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
-                sdsfree(slot_info);
-                goto werr;
+    /* Write the kvstore, that is the actually DB data. */
+    if (!isSlotSyncRdbSaveInfo(rsi)) {
+        kvs_it = kvstoreIteratorInit(db->keys);
+        int last_slot = -1;
+        /* Iterate this DB writing every entry */
+        while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+            int curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
+            /* Save slot info. */
+            if (server.cluster_enabled && curr_slot != last_slot) {
+                if ((res = rdbSaveSlotInfoAuxFields(rdb, db, curr_slot)) < 0) goto werr;
+                written += res;
+                last_slot = curr_slot;
             }
+
+            if ((res = rdbSaveKeyValueEntry(rdb, dbid, de, key_counter, pname)) < 0) goto werr;
             written += res;
-            last_slot = curr_slot;
-            sdsfree(slot_info);
         }
-        sds keystr = dictGetKey(de);
-        robj key, *o = dictGetVal(de);
-        long long expire;
-        size_t rdb_bytes_before_key = rdb->processed_bytes;
-
-        initStaticStringObject(key, keystr);
-
-        /* Only save data for slots that need sync. */
-        if (rsi && rsi->slot_ranges && listLength(rsi->slot_ranges) > 0 &&
-            !isKeyInSlotRanges(&key, rsi->slot_ranges)) {
-            continue;
-        }
-
-        expire = getExpire(db, &key);
-        if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
-        written += res;
-
-        /* In fork child process, we can try to release memory back to the
-         * OS and possibly avoid or decrease COW. We give the dismiss
-         * mechanism a hint about an estimated size of the object we stored. */
-        size_t dump_size = rdb->processed_bytes - rdb_bytes_before_key;
-        if (server.in_fork_child) dismissObject(o, dump_size);
-
-        /* Update child info every 1 second (approximately).
-         * in order to avoid calling mstime() on each iteration, we will
-         * check the diff every 1024 keys */
-        if (((*key_counter)++ & 1023) == 0) {
-            long long now = mstime();
-            if (now - info_updated_time >= 1000) {
-                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_counter, pname);
-                info_updated_time = now;
+        kvstoreIteratorRelease(kvs_it);
+    } else {
+        listNode *ln;
+        listIter li;
+        listRewind(rsi->slot_ranges, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            slotRange *range = ln->value;
+            for (int curr_slot = range->start_slot; curr_slot <= range->end_slot; curr_slot++) {
+                if (kvstoreDictSize(db->keys, curr_slot) == 0) continue;
+                if (server.cluster_enabled) {
+                    if ((res = rdbSaveSlotInfoAuxFields(rdb, db, curr_slot)) < 0) goto werr;
+                    written += res;
+                }
+                kvs_di = kvstoreGetDictIterator(db->keys, curr_slot);
+                while ((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
+                    if ((res = rdbSaveKeyValueEntry(rdb, dbid, de, key_counter, pname)) < 0) goto werr;
+                    written += res;
+                }
+                kvstoreReleaseDictIterator(kvs_di);
             }
         }
     }
-    kvstoreIteratorRelease(kvs_it);
+
     return written;
 
 werr:
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
+    if (kvs_di) kvstoreReleaseDictIterator(kvs_di);
     return -1;
 }
 

@@ -322,7 +322,7 @@ void kvstoreRelease(kvstore *kvs) {
     zfree(kvs);
 }
 
-unsigned long long int kvstoreSize(kvstore *kvs) {
+unsigned long long kvstoreSize(kvstore *kvs) {
     if (kvs->num_dicts != 1) {
         return kvs->key_count;
     } else {
