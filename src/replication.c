@@ -1069,10 +1069,6 @@ int startBgsaveForReplication(int mincapa, int req, list *slot_ranges) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-
-            /* Check replica has the exact slot ranges. */
-            if (!isSlotRangeListSame(replica->slotsync_slots, slot_ranges)) continue;
-
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_state = REPL_STATE_NONE;
                 replica->flag.replica = 0;
@@ -1094,6 +1090,8 @@ int startBgsaveForReplication(int mincapa, int req, list *slot_ranges) {
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 /* Check replica has the exact requirements */
                 if (replica->replica_req != req) continue;
+                /* Check replica has the exact slot ranges. */
+                if (!isSlotRangeListSame(replica->slotsync_slots, slot_ranges)) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
