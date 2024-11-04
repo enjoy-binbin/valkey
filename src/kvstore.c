@@ -49,6 +49,7 @@
 #define UNUSED(V) ((void)V)
 
 static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it);
+static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta);
 
 struct _kvstore {
     int flags;
@@ -92,6 +93,117 @@ typedef struct {
 /**********************************/
 /*** Helpers **********************/
 /**********************************/
+
+/* Move the dict from src to dst. */
+void kvstoreMoveDict(kvstore *src, kvstore *dst, int didx) {
+    assert(kvstoreGetDict(src, didx) != NULL);
+    assert(kvstoreGetDict(dst, didx) == NULL);
+
+    dict *d = kvstoreGetDict(src, didx);
+
+    dst->dicts[didx] = d;
+    dst->allocated_dicts++;
+    cumulativeKeyCountAdd(dst, didx, dictSize(d));
+
+    src->dicts[didx] = NULL;
+    src->allocated_dicts--;
+    cumulativeKeyCountAdd(src, didx, -dictSize(d));
+
+    kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+    if (metadata->rehashing_node) {
+        listDelNode(metadata->kvs->rehashing, metadata->rehashing_node);
+
+        metadata->kvs = dst;
+        listAddNodeTail(metadata->kvs->rehashing, d);
+        metadata->rehashing_node = listLast(dst->rehashing);
+
+        unsigned long long from, to;
+        dictRehashingInfo(d, &from, &to);
+        dst->bucket_count += (from + to);
+        dst->overhead_hashtable_lut += (from + to);
+        dst->overhead_hashtable_rehashing += from;
+
+        src->bucket_count -= (from + to);
+        src->overhead_hashtable_lut -= (from + to);
+        src->overhead_hashtable_rehashing -= from;
+    } else {
+        metadata->kvs = dst;
+
+        dst->bucket_count += dictBuckets(d);
+        dst->overhead_hashtable_lut += dictBuckets(d);
+
+        src->bucket_count -= dictBuckets(d);
+        src->overhead_hashtable_lut -= dictBuckets(d);
+    }
+}
+
+void kvstoreSwapDict(kvstore *kvs1, kvstore *kvs2, int didx) {
+    dict *d1 = kvs1->dicts[didx];
+    dict *d2 = kvs2->dicts[didx];
+    kvstoreDictMetadata *metadata1 = d1 ? (kvstoreDictMetadata *)dictMetadata(d1) : NULL;
+    kvstoreDictMetadata *metadata2 = d2 ? (kvstoreDictMetadata *)dictMetadata(d2) : NULL;
+
+    kvs1->dicts[didx] = d2;
+    kvs2->dicts[didx] = d1;
+    if (metadata1) metadata1->kvs = kvs2;
+    if (metadata2) metadata2->kvs = kvs1;
+
+    if (metadata1 && metadata1->rehashing_node) {
+        listDelNode(kvs1->rehashing, metadata1->rehashing_node);
+
+        listAddNodeTail(kvs2->rehashing, d1);
+        metadata1->rehashing_node = listLast(kvs2->rehashing);
+
+        unsigned long long from, to;
+        dictRehashingInfo(d1, &from, &to);
+        kvs1->bucket_count -= from;
+        kvs1->bucket_count -= to;
+        kvs1->overhead_hashtable_lut -= from;
+        kvs1->overhead_hashtable_lut -= to;
+        kvs1->overhead_hashtable_rehashing -= from;
+
+        kvs2->bucket_count += from;
+        kvs2->bucket_count += to;
+        kvs2->overhead_hashtable_lut += from;
+        kvs2->overhead_hashtable_lut += to;
+        kvs2->overhead_hashtable_rehashing += from;
+    }
+    if (metadata2 && metadata2->rehashing_node) {
+        listDelNode(kvs2->rehashing, metadata2->rehashing_node);
+
+        listAddNodeTail(kvs1->rehashing, d2);
+        metadata2->rehashing_node = listLast(kvs1->rehashing);
+
+        unsigned long long from, to;
+        dictRehashingInfo(d2, &from, &to);
+        kvs2->bucket_count -= from;
+        kvs2->bucket_count -= to;
+        kvs2->overhead_hashtable_lut -= from;
+        kvs2->overhead_hashtable_lut -= to;
+        kvs2->overhead_hashtable_rehashing -= from;
+
+        kvs1->bucket_count += from;
+        kvs1->bucket_count += to;
+        kvs1->overhead_hashtable_lut += from;
+        kvs1->overhead_hashtable_lut += to;
+        kvs1->overhead_hashtable_rehashing += from;
+    }
+
+    if (d1) {
+        cumulativeKeyCountAdd(kvs1, didx, -dictSize(d1));
+        cumulativeKeyCountAdd(kvs2, didx, dictSize(d1));
+    }
+    if (d2) {
+        cumulativeKeyCountAdd(kvs2, didx, -dictSize(d2));
+        cumulativeKeyCountAdd(kvs1, didx, dictSize(d2));
+    }
+
+    if (d1 == NULL && kvs1->dicts[didx] != NULL) kvs1->allocated_dicts++;
+    if (d1 != NULL && kvs1->dicts[didx] == NULL) kvs1->allocated_dicts--;
+
+    if (d2 == NULL && kvs2->dicts[didx] != NULL) kvs2->allocated_dicts++;
+    if (d2 != NULL && kvs2->dicts[didx] == NULL) kvs2->allocated_dicts--;
+}
 
 /* Get the dictionary pointer based on dict-index. */
 dict *kvstoreGetDict(kvstore *kvs, int didx) {
@@ -144,7 +256,7 @@ static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     kvs->key_count += delta;
 
     dict *d = kvstoreGetDict(kvs, didx);
-    size_t dsize = dictSize(d);
+    size_t dsize = d ? dictSize(d) : 0;  /* dict could be deleted. */
     int non_empty_dicts_delta = dsize == 1 ? 1 : dsize == 0 ? -1
                                                             : 0;
     kvs->non_empty_dicts += non_empty_dicts_delta;

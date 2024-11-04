@@ -81,5 +81,7 @@ dictEntry *kvstoreDictTwoPhaseUnlinkFind(kvstore *kvs, int didx, const void *key
 void kvstoreDictTwoPhaseUnlinkFree(kvstore *kvs, int didx, dictEntry *he, dictEntry **plink, int table_index);
 int kvstoreDictDelete(kvstore *kvs, int didx, const void *key);
 dict *kvstoreGetDict(kvstore *kvs, int didx);
+void kvstoreMoveDict(kvstore *src, kvstore *dst, int didx);
+void kvstoreSwapDict(kvstore *kvs1, kvstore *kvs2, int didx);
 
 #endif /* DICTARRAY_H_ */

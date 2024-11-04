@@ -597,6 +597,15 @@ serverDb *initTempDb(void) {
         tempDb[i].id = i;
         tempDb[i].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
         tempDb[i].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
+
+        tempDb[i].expires_cursor = 0;
+        tempDb[i].blocking_keys = dictCreate(&keylistDictType);
+        tempDb[i].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
+        tempDb[i].ready_keys = dictCreate(&objectKeyPointerValueDictType);
+        tempDb[i].watched_keys = dictCreate(&keylistDictType);
+        tempDb[i].avg_ttl = 0;
+        tempDb[i].defrag_later = listCreate();
+        listSetFreeMethod(tempDb[i].defrag_later, (void (*)(void *))sdsfree);
     }
 
     return tempDb;
@@ -609,6 +618,12 @@ void discardTempDb(serverDb *tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
+
+        dictRelease(tempDb[i].blocking_keys);
+        dictRelease(tempDb[i].blocking_keys_unblock_on_nokey);
+        dictRelease(tempDb[i].ready_keys);
+        dictRelease(tempDb[i].watched_keys);
+        listRelease(tempDb[i].defrag_later);
     }
 
     zfree(tempDb);
@@ -616,6 +631,12 @@ void discardTempDb(serverDb *tempDb) {
 
 int selectDb(client *c, int id) {
     if (id < 0 || id >= server.dbnum) return C_ERR;
+
+    if (c->flag.slot_sync_primary) {
+        clientSelectDb(c, id);
+        return C_OK;
+    }
+
     c->db = &server.db[id];
     return C_OK;
 }
