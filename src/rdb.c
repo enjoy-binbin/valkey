@@ -3660,8 +3660,6 @@ void bioRdbLoad(void *args[]) {
         link->transfer_tmpfile_name = NULL;
     }
 
-    /* Mark the synchronization has done. */
-    link->sync_state = CLUSTER_SLOTSYNC_STATE_DONE_LOADING;
 
     /* Set to a value large enough after first init. */
     link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
@@ -3675,6 +3673,10 @@ void bioRdbLoad(void *args[]) {
     if (job->usemark) sdsfree(job->eofmark);
 
     zfree(job);
+
+    /* Mark the synchronization has done. */
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_DONE_LOADING;
+
     return;
 
 error:

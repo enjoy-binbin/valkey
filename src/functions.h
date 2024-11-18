@@ -137,7 +137,7 @@ void functionsLibCtxClearCurrent(int async, void(callback)(dict *));
 void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx);
 void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *));
 void functionsLibCtxSwapWithCurrent(functionsLibCtx *new_lib_ctx, int async);
-
+int libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_lib_ctx_src, int replace, sds *err);
 int functionLibCreateFunction(sds name, void *function, functionLibInfo *li, sds desc, uint64_t f_flags, sds *err);
 
 int luaEngineInitEngine(void);

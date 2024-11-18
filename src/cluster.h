@@ -149,6 +149,5 @@ void clusterSlotPendingDelete(void);
 int testInjectError(const char *error);
 char *getInjectOptionValue(const char *option);
 list *createSlotRangeList(void);
-void clientSelectDb(client *c, int dbid);
 
 #endif /* __CLUSTER_H */
