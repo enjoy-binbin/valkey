@@ -6227,7 +6227,8 @@ unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit) 
     kvstoreReleaseDictIterator(kvs_di);
 
     server.server_del_keys_in_slot = 0;
-    serverAssert(server.execution_nesting == 0);
+    // clusterCommandSlotLinkKill -> delkeysNotOwnedByMySelf
+    // serverAssert(server.execution_nesting == 0);
     return j;
 }
 
