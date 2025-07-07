@@ -1003,6 +1003,12 @@ start_server {tags {"scripting"}} {
         } 1 l
     } {7999}
 
+    test {Script check unpack with INT_MAX} {
+        run_script {return unpack({}, 0, 2^31+1)} 0
+        run_script {return unpack({}, 0, 2^31)} 0
+        assert_error {ERR*too many results to unpack script*} {run_script {return unpack({}, 0, 2^31-1)} 0}
+    }
+
     test "Script read key with expiration set" {
         r SET key value EX 10
         assert_equal [run_script {
