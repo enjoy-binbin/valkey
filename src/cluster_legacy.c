@@ -3956,20 +3956,36 @@ int clusterProcessPacket(clusterLink *link) {
                     serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
                               sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
 
+                    if (sender_claimed_primary && nodeIsPrimary(sender_claimed_primary) && nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                        /* sender is a replica and sender_claimed_primary is a primary in my view, check
+                         * the epoch of sender_claimed_primary. If the packet is stale, we avoid processing
+                         * it anymore, otherwise this may cause a primary-replica chain issue. */
+                        serverLog(LL_NOTICE,
+                                  "Ignore stale message from %.40s (%s) in shard %.40s;"
+                                  " gossip config epoch: %llu, current config epoch: %llu",
+                                  sender->name, sender->human_nodename, sender->shard_id,
+                                  (unsigned long long)sender_claimed_config_epoch,
+                                  (unsigned long long)nodeEpoch(sender_claimed_primary));
+                        return 1;
+                    }
+
+                    if ((!sender_claimed_primary || nodeIsReplica(sender_claimed_primary)) && nodeEpoch(sender) > sender_claimed_config_epoch) {
+                        /* sender is a replica and sender_claimed_primary is NULL or it is a replica in my view,
+                         * check the epoch of sender. If the packet is stale, we avoid processing it anymore,
+                         * otherwise we may mistakenly set the sender as a replica node. */
+                        serverLog(LL_NOTICE,
+                                  "Ignore stale message from %.40s (%s) in shard %.40s;"
+                                  " gossip config epoch: %llu, current config epoch: %llu",
+                                  sender->name, sender->human_nodename, sender->shard_id,
+                                  (unsigned long long)sender_claimed_config_epoch,
+                                  (unsigned long long)nodeEpoch(sender_claimed_primary));
+                        return 1;
+                    }
+
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
-                            serverLog(LL_NOTICE,
-                                      "Ignore stale message from %.40s (%s) in shard %.40s;"
-                                      " gossip config epoch: %llu, current config epoch: %llu",
-                                      sender->name, sender->human_nodename, sender->shard_id,
-                                      (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
-                            /* This packet is stale so we avoid processing it anymore. Otherwise
-                             * this may cause a primary-replica chain issue. */
-                            return 1;
-                        } else if (nodeIsReplica(sender_claimed_primary)) {
+                        if (nodeIsReplica(sender_claimed_primary)) {
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
                              * which is the new primary in the shard. */
