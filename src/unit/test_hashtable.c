@@ -333,11 +333,11 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     long add = hashtableEntriesPerBucket() * 5;
     for (j = 0; j < add; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)(2000 + j)));
-    }
 
-    char buf[4096];
-    hashtableGetStats(buf, sizeof(buf), ht, 1);
-    printf("buf: %s\n", buf);
+        char buf[4096];
+        hashtableGetStats(buf, sizeof(buf), ht, 1);
+        printf("buf%d: %s\n", j, buf);
+    }
 
     /* Check that we restart the rehashing. */
     TEST_ASSERT(hashtableSize(ht) == (size_t)(add + 1));
