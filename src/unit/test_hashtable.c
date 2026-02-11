@@ -327,6 +327,10 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
         TEST_ASSERT(hashtableAdd(ht, (void *)(2000 + j)));
     }
 
+    char buf[4096];
+    hashtableGetStats(buf, sizeof(buf), ht, 1);
+    printf("buf: %s\n", buf);
+
     /* Check that we restart the rehashing. */
     TEST_ASSERT(hashtableSize(ht) == (size_t)(add + 1));
     TEST_ASSERT(hashtableGetRehashingIndex(ht) == 0);
