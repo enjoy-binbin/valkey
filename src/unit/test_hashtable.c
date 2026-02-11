@@ -336,7 +336,7 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
 
         char buf[4096];
         hashtableGetStats(buf, sizeof(buf), ht, 1);
-        printf("buf%d: %s\n", j, buf);
+        printf("buf%ld: %s\n", j, buf);
     }
 
     /* Check that we restart the rehashing. */
