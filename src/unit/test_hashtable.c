@@ -311,6 +311,10 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
         }
     }
 
+    char buf0[4096];
+    hashtableGetStats(buf0, sizeof(buf0), ht, 1);
+    printf("buf0: %s\n", buf0);
+
     /* Delete all elements except one so there are a lot of empty buckets. */
     hashtablePauseAutoShrink(ht);
     for (j = 0; j < 2000; j++) {
@@ -320,6 +324,10 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     hashtableResumeAutoShrink(ht);
     TEST_ASSERT(hashtableSize(ht) == 1);
     TEST_ASSERT(hashtableGetRehashingIndex(ht) == 0);
+
+    char buf1[4096];
+    hashtableGetStats(buf1, sizeof(buf1), ht, 1);
+    printf("buf1: %s\n", buf1);
 
     /* Add elements to reach MAX_FILL_PERCENT_HARD will trigger the shrink rehashing to abort. */
     long add = hashtableEntriesPerBucket() * 5;
